@@ -643,8 +643,7 @@ if __name__ == "__main__":
         print("Error: GEMINI_API_KEY 環境変数が設定されていません。")
         exit(1)
 
-    # Gemini初期化（グローバル変数を更新）
-    global ai_model
+    # Gemini初期化
     ai_model = init_gemini()
     print("Gemini API initialized")
 
