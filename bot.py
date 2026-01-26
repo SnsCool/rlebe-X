@@ -496,6 +496,118 @@ async def ask(interaction: discord.Interaction, query: str):
 
 
 # =============================================================================
+# イベント: @Bot メンション対応
+# =============================================================================
+@client.event
+async def on_message(message: discord.Message):
+    """@Bot メンションでの呼び出しを処理"""
+
+    # 自分自身のメッセージは無視
+    if message.author.bot:
+        return
+
+    # Botがメンションされていない場合は無視
+    if not client.user or client.user not in message.mentions:
+        return
+
+    # 権限チェック
+    if ALLOWED_USER_IDS and message.author.id not in ALLOWED_USER_IDS:
+        await message.reply("このコマンドを実行する権限がありません。")
+        return
+
+    # サーバー内でのみ動作
+    if not message.guild:
+        await message.reply("サーバー内で実行してください。")
+        return
+
+    # メッセージからBotメンションを除去してクエリを取得
+    query = message.content
+    if client.user:
+        query = query.replace(f"<@{client.user.id}>", "").replace(f"<@!{client.user.id}>", "").strip()
+
+    if not query:
+        await message.reply(
+            "使い方: `@Bot 田中さんの先月のいいね数` または `@Bot 先月のレポート`"
+        )
+        return
+
+    # 処理中メッセージ
+    processing_msg = await message.reply("集計中...")
+
+    # サーバーメンバー取得
+    guild = message.guild
+    members = [{"id": m.id, "name": m.display_name} for m in guild.members if not m.bot]
+    current_date = datetime.now(JST).strftime("%Y-%m-%d")
+
+    # AI解析
+    intent = parse_intent_with_ai(query, current_date, members)
+
+    if intent.get("error"):
+        await processing_msg.edit(content=f"解析エラー: {intent['error']}")
+        return
+
+    if intent["action"] == "unknown":
+        await processing_msg.edit(
+            content="すみません、リクエストを理解できませんでした。\n"
+                    "例: `@Bot 田中さんの先月のいいね数` `@Bot 先月のレポート`"
+        )
+        return
+
+    # 期間計算
+    period = intent["period"]
+    start_dt, end_dt = get_period_range(period)
+    start_utc = start_dt.astimezone(UTC) if start_dt else None
+    end_utc = end_dt.astimezone(UTC) if end_dt else None
+    period_str = format_period_str(period)
+
+    # 集計実行
+    target_user_id = intent.get("target_user_id")
+
+    try:
+        user_stats = await collect_stats(guild, start_utc, end_utc, target_user_id)
+    except Exception as e:
+        await processing_msg.edit(content=str(e))
+        return
+
+    # データがない場合
+    if not user_stats:
+        if target_user_id:
+            target_name = "指定ユーザー"
+            for m in members:
+                if m["id"] == target_user_id:
+                    target_name = m["name"]
+                    break
+            await processing_msg.edit(
+                content=f"{period_str} の **{target_name}** さんのデータがありませんでした。"
+            )
+        else:
+            await processing_msg.edit(content=f"{period_str} のデータがありませんでした。")
+        return
+
+    # ソート: hearts降順 → posts降順 → name昇順
+    sorted_data = sorted(
+        user_stats.values(),
+        key=lambda x: (-x["hearts"], -x["posts"], x["name"])
+    )
+
+    # CSV生成（個別でも全体でも常にCSV）
+    csv_file = generate_csv(sorted_data)
+    filename = f"{period_str.replace('年', '-').replace('月', '')}_report.csv"
+
+    # DMで送信
+    try:
+        await message.author.send(
+            f"**{period_str}** の集計結果です。",
+            file=discord.File(csv_file, filename=filename)
+        )
+        await processing_msg.edit(content="DMにCSVを送信しました。")
+    except discord.Forbidden:
+        await processing_msg.edit(
+            content="DMを送信できませんでした。DM受信設定を確認してください。"
+        )
+
+
+# =============================================================================
 # イベント: Bot起動時
 # =============================================================================
 @client.event
