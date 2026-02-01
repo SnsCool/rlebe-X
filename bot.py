@@ -22,7 +22,7 @@ import google.generativeai as genai
 # =============================================================================
 GUILD_ID = 1172020927047942154
 CHANNEL_IDS = [1448981729938247710]
-ALLOWED_USER_IDS = [1307922048731058247]
+ALLOWED_USER_IDS = [1340666940615823451, 1307922048731058247]
 HEART_EMOJI = "❤️"
 EXCLUDE_BOTS = True
 
@@ -39,7 +39,7 @@ def init_gemini():
     api_key = os.environ.get("GEMINI_API_KEY")
     if api_key:
         genai.configure(api_key=api_key)
-        return genai.GenerativeModel("gemini-3.0-flash")
+        return genai.GenerativeModel("gemini-2.5-flash")
     return None
 
 ai_model = None  # 起動時に初期化
@@ -280,12 +280,74 @@ async def collect_stats(
     return user_stats
 
 
-def generate_csv(data: list[dict]) -> io.BytesIO:
+def extract_department(name: str) -> tuple[str, str]:
+    """名前から部署を抽出する。【部署】名前 の形式を想定。"""
+    import re
+    match = re.match(r'【(.+?)】\s*(.+)', name)
+    if match:
+        return match.group(1), match.group(2)
+    return "", name
+
+
+def generate_csv(data: list[dict], inactive_members: list[str] = None, include_total: bool = True) -> io.BytesIO:
     """集計データをCSVファイル（BytesIO）として生成する。"""
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["name", "hearts", "posts"])
+
+    # 日本語ヘッダー（部署を一番左に）
+    fieldnames_jp = ["部署", "名前", "いいね数", "投稿数", "平均いいね数", "全体いいね数", "全体投稿数"]
+    writer = csv.DictWriter(output, fieldnames=fieldnames_jp)
     writer.writeheader()
-    writer.writerows(data)
+
+    # 先に合計を計算
+    total_hearts = sum(row["hearts"] for row in data)
+    total_posts = sum(row["posts"] for row in data)
+
+    # 投稿者データを書き込み
+    for i, row in enumerate(data):
+        dept, name_only = extract_department(row["name"])
+        row_data = {
+            "部署": dept,
+            "名前": name_only,
+            "いいね数": row["hearts"],
+            "投稿数": row["posts"],
+            "平均いいね数": row["avg_hearts"],
+            "全体いいね数": "",
+            "全体投稿数": ""
+        }
+
+        # 1行目にのみ全体いいね数・全体投稿数を表示
+        if i == 0:
+            row_data["全体いいね数"] = total_hearts
+            row_data["全体投稿数"] = total_posts
+
+        writer.writerow(row_data)
+
+    # 投稿していないメンバーを追加（部署と名前の列に）
+    inactive_list = inactive_members if inactive_members else []
+    for inactive_name in inactive_list:
+        dept, name_only = extract_department(inactive_name)
+        writer.writerow({
+            "部署": dept,
+            "名前": name_only,
+            "いいね数": 0,
+            "投稿数": 0,
+            "平均いいね数": 0,
+            "全体いいね数": "",
+            "全体投稿数": ""
+        })
+
+    # 合計行を追加
+    if include_total:
+        total_avg = round(total_hearts / total_posts, 2) if total_posts > 0 else 0
+        writer.writerow({
+            "部署": "",
+            "名前": "【合計】",
+            "いいね数": total_hearts,
+            "投稿数": total_posts,
+            "平均いいね数": total_avg,
+            "全体いいね数": "",
+            "全体投稿数": ""
+        })
 
     csv_bytes = output.getvalue().encode("utf-8-sig")
     return io.BytesIO(csv_bytes)
@@ -353,20 +415,42 @@ async def report(interaction: discord.Interaction, period: str = "last"):
         )
         return
 
+    # 平均いいね数を計算
+    for user_id, stats in user_stats.items():
+        if stats["posts"] > 0:
+            stats["avg_hearts"] = round(stats["hearts"] / stats["posts"], 2)
+        else:
+            stats["avg_hearts"] = 0.0
+
     # ソート: hearts降順 → posts降順 → name昇順
     sorted_data = sorted(
         user_stats.values(),
         key=lambda x: (-x["hearts"], -x["posts"], x["name"])
     )
 
-    # CSV生成
-    csv_file = generate_csv(sorted_data)
+    # 投稿していないメンバーを取得
+    posted_user_ids = set(user_stats.keys())
+    inactive_members = []
+    for member in interaction.guild.members:
+        if member.bot:
+            continue
+        if member.id not in posted_user_ids:
+            inactive_members.append(member.display_name)
+
+    # CSV生成（投稿なしメンバーと合計を含む）
+    csv_file = generate_csv(sorted_data, inactive_members=inactive_members, include_total=True)
     filename = f"{format_period_str(parsed_period).replace('年', '-').replace('月', '')}_report.csv"
+
+    # レポートメッセージ作成
+    total_hearts = sum(s["hearts"] for s in sorted_data)
+    total_posts = sum(s["posts"] for s in sorted_data)
+    report_message = f"**{format_period_str(parsed_period)}** の集計結果です。\n"
+    report_message += f"📊 **全体合計**: いいね数 {total_hearts} / 投稿数 {total_posts}"
 
     # DM送信
     try:
         await interaction.user.send(
-            f"**{format_period_str(parsed_period)}** の集計結果です。",
+            report_message,
             file=discord.File(csv_file, filename=filename)
         )
         await interaction.followup.send("DMにCSVを送信しました。", ephemeral=True)
@@ -458,10 +542,12 @@ async def ask(interaction: discord.Interaction, query: str):
             return
 
         data = list(user_stats.values())[0]
+        avg_hearts = round(data['hearts'] / data['posts'], 2) if data['posts'] > 0 else 0.0
         await interaction.followup.send(
             f"**{period_str}** の **{data['name']}** さん\n"
             f"❤️ いいね数: **{data['hearts']}**\n"
-            f"📝 投稿数: **{data['posts']}**",
+            f"📝 投稿数: **{data['posts']}**\n"
+            f"📊 平均いいね数: **{avg_hearts}**",
             ephemeral=True
         )
 
@@ -474,17 +560,40 @@ async def ask(interaction: discord.Interaction, query: str):
             )
             return
 
+        # 平均いいね数を計算
+        for user_id, stats in user_stats.items():
+            if stats["posts"] > 0:
+                stats["avg_hearts"] = round(stats["hearts"] / stats["posts"], 2)
+            else:
+                stats["avg_hearts"] = 0.0
+
         sorted_data = sorted(
             user_stats.values(),
             key=lambda x: (-x["hearts"], -x["posts"], x["name"])
         )
 
-        csv_file = generate_csv(sorted_data)
+        # 投稿していないメンバーを取得
+        posted_user_ids = set(user_stats.keys())
+        inactive_members = []
+        for member in guild.members:
+            if member.bot:
+                continue
+            if member.id not in posted_user_ids:
+                inactive_members.append(member.display_name)
+
+        # CSV生成（投稿なしメンバーと合計を含む）
+        csv_file = generate_csv(sorted_data, inactive_members=inactive_members, include_total=True)
         filename = f"{period_str.replace('年', '-').replace('月', '')}_report.csv"
+
+        # レポートメッセージ作成
+        total_hearts = sum(s["hearts"] for s in sorted_data)
+        total_posts = sum(s["posts"] for s in sorted_data)
+        report_message = f"**{period_str}** の集計結果です。\n"
+        report_message += f"📊 **全体合計**: いいね数 {total_hearts} / 投稿数 {total_posts}"
 
         try:
             await interaction.user.send(
-                f"**{period_str}** の集計結果です。",
+                report_message,
                 file=discord.File(csv_file, filename=filename)
             )
             await interaction.followup.send("DMにCSVを送信しました。", ephemeral=True)
@@ -531,9 +640,6 @@ async def on_message(message: discord.Message):
         )
         return
 
-    # 処理中メッセージ
-    processing_msg = await message.reply("集計中...")
-
     # サーバーメンバー取得
     guild = message.guild
     members = [{"id": m.id, "name": m.display_name} for m in guild.members if not m.bot]
@@ -543,14 +649,21 @@ async def on_message(message: discord.Message):
     intent = parse_intent_with_ai(query, current_date, members)
 
     if intent.get("error"):
-        await processing_msg.edit(content=f"解析エラー: {intent['error']}")
+        error_msg = f"解析エラー: {intent['error']}"
+        print(error_msg)
+        try:
+            await message.reply(error_msg)
+        except Exception as e:
+            print(f"Failed to send error message: {e}")
         return
 
     if intent["action"] == "unknown":
-        await processing_msg.edit(
-            content="すみません、リクエストを理解できませんでした。\n"
-                    "例: `@Bot 田中さんの先月のいいね数` `@Bot 先月のレポート`"
-        )
+        error_msg = "すみません、リクエストを理解できませんでした。\n例: 「先月のレポート」「田中さんのいいね数」「2024年1月の集計」"
+        print("Intent parse: unknown action")
+        try:
+            await message.reply(error_msg)
+        except Exception as e:
+            print(f"Failed to send unknown action message: {e}")
         return
 
     # 期間計算
@@ -566,7 +679,12 @@ async def on_message(message: discord.Message):
     try:
         user_stats = await collect_stats(guild, start_utc, end_utc, target_user_id)
     except Exception as e:
-        await processing_msg.edit(content=str(e))
+        error_msg = f"集計エラー: {e}"
+        print(error_msg)
+        try:
+            await message.reply(error_msg)
+        except Exception as e2:
+            print(f"Failed to send error message: {e2}")
         return
 
     # データがない場合
@@ -577,12 +695,25 @@ async def on_message(message: discord.Message):
                 if m["id"] == target_user_id:
                     target_name = m["name"]
                     break
-            await processing_msg.edit(
-                content=f"{period_str} の **{target_name}** さんのデータがありませんでした。"
-            )
+            try:
+                await message.author.send(
+                    f"{period_str} の **{target_name}** さんのデータがありませんでした。"
+                )
+            except discord.Forbidden:
+                print("DM failed: user has DMs disabled.")
         else:
-            await processing_msg.edit(content=f"{period_str} のデータがありませんでした。")
+            try:
+                await message.author.send(f"{period_str} のデータがありませんでした。")
+            except discord.Forbidden:
+                print("DM failed: user has DMs disabled.")
         return
+
+    # 平均いいね数を計算
+    for user_id, stats in user_stats.items():
+        if stats["posts"] > 0:
+            stats["avg_hearts"] = round(stats["hearts"] / stats["posts"], 2)
+        else:
+            stats["avg_hearts"] = 0.0
 
     # ソート: hearts降順 → posts降順 → name昇順
     sorted_data = sorted(
@@ -590,21 +721,33 @@ async def on_message(message: discord.Message):
         key=lambda x: (-x["hearts"], -x["posts"], x["name"])
     )
 
-    # CSV生成（個別でも全体でも常にCSV）
-    csv_file = generate_csv(sorted_data)
+    # 投稿していないメンバーを取得
+    posted_user_ids = set(user_stats.keys())
+    inactive_members = []
+    for member in guild.members:
+        if member.bot:
+            continue
+        if member.id not in posted_user_ids:
+            inactive_members.append(member.display_name)
+
+    # CSV生成（投稿なしメンバーと合計を含む）
+    csv_file = generate_csv(sorted_data, inactive_members=inactive_members, include_total=True)
     filename = f"{period_str.replace('年', '-').replace('月', '')}_report.csv"
+
+    # レポートメッセージ作成
+    total_hearts = sum(s["hearts"] for s in sorted_data)
+    total_posts = sum(s["posts"] for s in sorted_data)
+    report_message = f"**{period_str}** の集計結果です。\n"
+    report_message += f"📊 **全体合計**: いいね数 {total_hearts} / 投稿数 {total_posts}"
 
     # DMで送信
     try:
         await message.author.send(
-            f"**{period_str}** の集計結果です。",
+            report_message,
             file=discord.File(csv_file, filename=filename)
         )
-        await processing_msg.edit(content="DMにCSVを送信しました。")
     except discord.Forbidden:
-        await processing_msg.edit(
-            content="DMを送信できませんでした。DM受信設定を確認してください。"
-        )
+        print("DM failed: user has DMs disabled.")
 
 
 # =============================================================================
