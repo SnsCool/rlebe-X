@@ -1345,6 +1345,63 @@ async def ai_report_command(interaction: discord.Interaction, period: str):
 
 
 # =============================================================================
+# デバッグ: チャンネル情報取得
+# =============================================================================
+@tree.command(
+    name="channel_info",
+    description="設定されているチャンネル/スレッドの情報を表示",
+    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None
+)
+async def channel_info_command(interaction: discord.Interaction):
+    """チャンネル情報表示コマンド"""
+    if interaction.user.id not in ALLOWED_USER_IDS:
+        await interaction.response.send_message("このコマンドを実行する権限がありません。", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    info_lines = ["**設定されているチャンネル/スレッド情報**\n"]
+
+    # レベッターチャンネル
+    for ch_id in CHANNEL_IDS:
+        try:
+            ch = await client.fetch_channel(ch_id)
+            info_lines.append(f"📢 レベッター: **{ch.name}** (ID: {ch_id})")
+        except:
+            info_lines.append(f"❌ レベッター: 取得失敗 (ID: {ch_id})")
+
+    # ランチ制度スレッド
+    try:
+        ch = await client.fetch_channel(LUNCH_THREAD_ID)
+        info_lines.append(f"🍽️ ランチ制度スレッド: **{ch.name}** (ID: {LUNCH_THREAD_ID})")
+    except:
+        info_lines.append(f"❌ ランチ制度スレッド: 取得失敗 (ID: {LUNCH_THREAD_ID})")
+
+    # ランチ制度チャンネル
+    try:
+        ch = await client.fetch_channel(LUNCH_CHANNEL_ID)
+        info_lines.append(f"🍽️ ランチ制度チャンネル: **{ch.name}** (ID: {LUNCH_CHANNEL_ID})")
+    except:
+        info_lines.append(f"❌ ランチ制度チャンネル: 取得失敗 (ID: {LUNCH_CHANNEL_ID})")
+
+    # 本気AIスレッド
+    try:
+        ch = await client.fetch_channel(AI_THREAD_ID)
+        info_lines.append(f"🤖 本気AIスレッド: **{ch.name}** (ID: {AI_THREAD_ID})")
+    except:
+        info_lines.append(f"❌ 本気AIスレッド: 取得失敗 (ID: {AI_THREAD_ID})")
+
+    # 本気AIチャンネル
+    try:
+        ch = await client.fetch_channel(AI_CHANNEL_ID)
+        info_lines.append(f"🤖 本気AIチャンネル: **{ch.name}** (ID: {AI_CHANNEL_ID})")
+    except:
+        info_lines.append(f"❌ 本気AIチャンネル: 取得失敗 (ID: {AI_CHANNEL_ID})")
+
+    await interaction.followup.send("\n".join(info_lines), ephemeral=True)
+
+
+# =============================================================================
 # イベント: Bot起動時
 # =============================================================================
 @client.event
