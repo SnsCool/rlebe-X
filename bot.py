@@ -1139,11 +1139,23 @@ async def collect_ai_stats(
             debug_count += 1
 
             # フォーム回答からの名前抽出（Bot投稿）
-            if message.author.bot and '【フォーム回答】' in message.content:
-                # 「名前:」の後の値を抽出
-                match = re.search(r'名前:\s*(.+?)(?:\n|$)', message.content)
-                if match:
-                    form_name_raw = match.group(1).strip()
+            if message.author.bot:
+                form_name_raw = None
+
+                # 形式1: 【フォーム回答】名前: xxx
+                if '【フォーム回答】' in message.content:
+                    match = re.search(r'名前:\s*(.+?)(?:\n|$)', message.content)
+                    if match:
+                        form_name_raw = match.group(1).strip()
+
+                # 形式2: フォームの入力がありました。【名前...】xxx
+                elif 'フォームの入力がありました' in message.content:
+                    # 【名前...】の後の行を取得
+                    match = re.search(r'【名前[^】]*】\s*\n?(.+?)(?:\n\n|\n【|$)', message.content, re.DOTALL)
+                    if match:
+                        form_name_raw = match.group(1).strip()
+
+                if form_name_raw:
                     # 名前を正規化（スペース除去など）して同じ人を統一
                     form_name = normalize_name(form_name_raw)
                     user_counts[form_name] += 1
