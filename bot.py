@@ -767,6 +767,20 @@ def extract_department_from_nickname(nickname: str) -> str | None:
     return match.group(1) if match else None
 
 
+def extract_departments_list(nickname: str) -> list[str]:
+    """
+    ニックネームから部署をリストで抽出する。
+    例: 【CTO室/マーケ】畑 来世人 → ["CTO室", "マーケ"]
+    """
+    match = re.match(r'【(.+?)】', nickname)
+    if not match:
+        return ["不明"]
+    dept_str = match.group(1)
+    # /で分割して複数部署を取得
+    depts = [d.strip() for d in dept_str.split('/') if d.strip()]
+    return depts if depts else ["不明"]
+
+
 def extract_name_from_nickname(nickname: str) -> str:
     """ニックネームから名前部分を抽出する。"""
     name = re.sub(r'【.+?】', '', nickname).strip()
@@ -873,10 +887,14 @@ async def collect_lunch_stats(
                 if participant not in user_departments:
                     member = find_member_by_name(guild, participant)
                     if member:
-                        user_departments[participant] = get_member_department(member)
+                        # 複数部署をリストで取得
+                        depts = extract_departments_list(member.display_name or member.name)
+                        user_departments[participant] = depts
                     else:
-                        user_departments[participant] = "不明"
-                dept_counts[user_departments.get(participant, "不明")] += 1
+                        user_departments[participant] = ["不明"]
+                # 部署別カウント（各部署にカウント）
+                for dept in user_departments.get(participant, ["不明"]):
+                    dept_counts[dept] += 1
             total_amount += parsed["total_amount"]
     except discord.Forbidden:
         raise Exception(f"スレッド <#{LUNCH_THREAD_ID}> の履歴を読む権限がありません。")
@@ -917,8 +935,15 @@ def generate_lunch_csv(stats: dict, total_members: int) -> str:
         row = []
         if i < len(sorted_users):
             name, count = sorted_users[i]
-            dept = stats["user_departments"].get(name, "不明")
-            row.extend([name, dept, count])
+            depts = stats["user_departments"].get(name, ["不明"])
+            # 複数部署の場合、名前と部署をセル内改行で表示
+            if isinstance(depts, list) and len(depts) > 1:
+                name_cell = "\n".join([name] * len(depts))
+                dept_cell = "\n".join(depts)
+            else:
+                name_cell = name
+                dept_cell = depts[0] if isinstance(depts, list) else depts
+            row.extend([name_cell, dept_cell, count])
         else:
             row.extend(["", "", ""])
         row.append("")
