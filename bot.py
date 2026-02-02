@@ -23,7 +23,8 @@ import google.generativeai as genai
 # =============================================================================
 GUILD_ID = 1172020927047942154
 CHANNEL_IDS = [1448981729938247710]  # レベッター（❤️集計）
-LUNCH_CHANNEL_ID = 1437763696096182363  # ランチ制度フォーム投稿チャンネル
+LUNCH_CHANNEL_ID = 1437763696096182363  # ランチ制度チャンネル
+LUNCH_THREAD_ID = 1459225398616260853  # ランチ制度フォーム投稿スレッド
 AI_THREAD_ID = 1451733100882165882  # 本気AI提出スレッド
 AI_CHANNEL_ID = 1425718558935224362  # 本気AI関連チャンネル
 ALLOWED_USER_IDS = [1340666940615823451, 1307922048731058247]
@@ -839,9 +840,13 @@ async def collect_lunch_stats(
     end_utc: datetime | None = None
 ) -> dict:
     """ランチ制度の利用状況を集計する。"""
-    channel = guild.get_channel(LUNCH_CHANNEL_ID)
-    if not channel or not isinstance(channel, discord.TextChannel):
-        raise Exception(f"チャンネル {LUNCH_CHANNEL_ID} が見つかりません。")
+    # スレッドから投稿を取得
+    thread = guild.get_thread(LUNCH_THREAD_ID)
+    if not thread:
+        try:
+            thread = await client.fetch_channel(LUNCH_THREAD_ID)
+        except Exception as e:
+            raise Exception(f"ランチ制度スレッド {LUNCH_THREAD_ID} が見つかりません: {e}")
 
     records = []
     user_counts = defaultdict(int)
@@ -851,7 +856,7 @@ async def collect_lunch_stats(
     unique_participants = set()
 
     try:
-        async for message in channel.history(
+        async for message in thread.history(
             after=start_utc,
             before=end_utc,
             limit=None,
@@ -874,7 +879,7 @@ async def collect_lunch_stats(
                 dept_counts[user_departments.get(participant, "不明")] += 1
             total_amount += parsed["total_amount"]
     except discord.Forbidden:
-        raise Exception(f"チャンネル <#{LUNCH_CHANNEL_ID}> の履歴を読む権限がありません。")
+        raise Exception(f"スレッド <#{LUNCH_THREAD_ID}> の履歴を読む権限がありません。")
 
     return {
         "records": records,
@@ -1057,19 +1062,20 @@ async def collect_ai_stats(
     end_utc: datetime | None = None
 ) -> dict:
     """本気AI提出の統計を集計する。"""
-    # スレッドから投稿を取得
+    # スレッドから投稿を取得（複数の方法で試行）
     thread = guild.get_thread(AI_THREAD_ID)
     if not thread:
-        # スレッドがキャッシュにない場合はfetch
         try:
-            thread = await guild.fetch_channel(AI_THREAD_ID)
-        except:
-            raise Exception(f"スレッド {AI_THREAD_ID} が見つかりません。")
+            # client.fetch_channel でアーカイブされたスレッドも取得
+            thread = await client.fetch_channel(AI_THREAD_ID)
+        except Exception as e:
+            raise Exception(f"スレッド {AI_THREAD_ID} が見つかりません: {e}")
 
     user_counts = defaultdict(int)
     user_departments = {}
     unique_participants = set()
     monthly_counts = defaultdict(int)  # YYYY-MM -> count
+    debug_count = 0  # デバッグ用
 
     try:
         async for message in thread.history(
@@ -1078,8 +1084,10 @@ async def collect_ai_stats(
             limit=None,
             oldest_first=True
         ):
-            if message.author.bot:
-                continue
+            debug_count += 1
+            # Bot投稿も含める（フォーム連携の可能性）
+            # if message.author.bot:
+            #     continue
 
             user_id = message.author.id
             display_name = message.author.display_name
@@ -1100,8 +1108,15 @@ async def collect_ai_stats(
 
     # チャンネルからも投稿数を取得
     channel = guild.get_channel(AI_CHANNEL_ID)
+    if not channel:
+        try:
+            channel = await client.fetch_channel(AI_CHANNEL_ID)
+        except:
+            channel = None
+
     channel_monthly_counts = defaultdict(int)
-    if channel and isinstance(channel, discord.TextChannel):
+    channel_debug_count = 0
+    if channel:
         try:
             async for message in channel.history(
                 after=start_utc,
@@ -1109,8 +1124,8 @@ async def collect_ai_stats(
                 limit=None,
                 oldest_first=True
             ):
-                if message.author.bot:
-                    continue
+                channel_debug_count += 1
+                # Bot投稿も含める
                 month_key = message.created_at.astimezone(JST).strftime("%Y-%m")
                 channel_monthly_counts[month_key] += 1
         except discord.Forbidden:
@@ -1122,7 +1137,9 @@ async def collect_ai_stats(
         "unique_participants": unique_participants,
         "monthly_counts": dict(monthly_counts),
         "channel_monthly_counts": dict(channel_monthly_counts),
-        "total_posts": sum(user_counts.values())
+        "total_posts": sum(user_counts.values()),
+        "debug_thread_messages": debug_count,
+        "debug_channel_messages": channel_debug_count
     }
 
 
@@ -1240,7 +1257,14 @@ async def ai_report_command(interaction: discord.Interaction, period: str):
 
         stats = await collect_ai_stats(guild, start_utc, end_utc)
         if stats["total_posts"] == 0:
-            await interaction.followup.send(f"{period_label}の本気AI提出データがありません。", ephemeral=True)
+            debug_info = (
+                f"スレッド読取数: {stats.get('debug_thread_messages', 0)}, "
+                f"チャンネル読取数: {stats.get('debug_channel_messages', 0)}"
+            )
+            await interaction.followup.send(
+                f"{period_label}の本気AI提出データがありません。\n({debug_info})",
+                ephemeral=True
+            )
             return
 
         # 全体メンバー数（Bot除外）
