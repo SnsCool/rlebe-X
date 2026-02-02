@@ -24,6 +24,8 @@ import google.generativeai as genai
 GUILD_ID = 1172020927047942154
 CHANNEL_IDS = [1448981729938247710]  # レベッター（❤️集計）
 LUNCH_CHANNEL_ID = 1437763696096182363  # ランチ制度フォーム投稿チャンネル
+AI_THREAD_ID = 1451733100882165882  # 本気AI提出スレッド
+AI_CHANNEL_ID = 1425718558935224362  # 本気AI関連チャンネル
 ALLOWED_USER_IDS = [1340666940615823451, 1307922048731058247]
 HEART_EMOJI = "❤️"
 EXCLUDE_BOTS = True
@@ -1034,6 +1036,226 @@ async def lunch_report_command(interaction: discord.Interaction, period: str):
             f"👥 利用者: {unique_count}人 / チャンネルメンバー {total_members}人\n"
             f"📈 利用率: {usage_rate:.1f}%\n"
             f"💰 総金額: ¥{stats['total_amount']:,}"
+        )
+
+        try:
+            await interaction.user.send(summary, file=file)
+            await interaction.followup.send("レポートをDMに送信しました。", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.followup.send("DMを送信できませんでした。DM設定を確認してください。", ephemeral=True)
+
+    except Exception as e:
+        await interaction.followup.send(f"エラーが発生しました: {e}", ephemeral=True)
+
+
+# =============================================================================
+# 本気AI: 集計関数
+# =============================================================================
+async def collect_ai_stats(
+    guild: discord.Guild,
+    start_utc: datetime | None = None,
+    end_utc: datetime | None = None
+) -> dict:
+    """本気AI提出の統計を集計する。"""
+    # スレッドから投稿を取得
+    thread = guild.get_thread(AI_THREAD_ID)
+    if not thread:
+        # スレッドがキャッシュにない場合はfetch
+        try:
+            thread = await guild.fetch_channel(AI_THREAD_ID)
+        except:
+            raise Exception(f"スレッド {AI_THREAD_ID} が見つかりません。")
+
+    user_counts = defaultdict(int)
+    user_departments = {}
+    unique_participants = set()
+    monthly_counts = defaultdict(int)  # YYYY-MM -> count
+
+    try:
+        async for message in thread.history(
+            after=start_utc,
+            before=end_utc,
+            limit=None,
+            oldest_first=True
+        ):
+            if message.author.bot:
+                continue
+
+            user_id = message.author.id
+            display_name = message.author.display_name
+            user_counts[display_name] += 1
+            unique_participants.add(display_name)
+
+            # 部署を取得
+            if display_name not in user_departments:
+                dept = get_member_department(message.author)
+                user_departments[display_name] = dept
+
+            # 月別カウント
+            month_key = message.created_at.astimezone(JST).strftime("%Y-%m")
+            monthly_counts[month_key] += 1
+
+    except discord.Forbidden:
+        raise Exception(f"スレッド <#{AI_THREAD_ID}> の履歴を読む権限がありません。")
+
+    # チャンネルからも投稿数を取得
+    channel = guild.get_channel(AI_CHANNEL_ID)
+    channel_monthly_counts = defaultdict(int)
+    if channel and isinstance(channel, discord.TextChannel):
+        try:
+            async for message in channel.history(
+                after=start_utc,
+                before=end_utc,
+                limit=None,
+                oldest_first=True
+            ):
+                if message.author.bot:
+                    continue
+                month_key = message.created_at.astimezone(JST).strftime("%Y-%m")
+                channel_monthly_counts[month_key] += 1
+        except discord.Forbidden:
+            pass
+
+    return {
+        "user_counts": dict(user_counts),
+        "user_departments": user_departments,
+        "unique_participants": unique_participants,
+        "monthly_counts": dict(monthly_counts),
+        "channel_monthly_counts": dict(channel_monthly_counts),
+        "total_posts": sum(user_counts.values())
+    }
+
+
+def generate_ai_csv(stats: dict, total_members: int) -> str:
+    """本気AI集計結果をCSV形式で出力"""
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    unique_count = len(stats["unique_participants"])
+    participation_rate = (unique_count / total_members * 100) if total_members > 0 else 0
+
+    sorted_users = sorted(stats["user_counts"].items(), key=lambda x: (-x[1], x[0]))
+    sorted_months = sorted(stats["monthly_counts"].items())
+    sorted_channel_months = sorted(stats["channel_monthly_counts"].items())
+
+    summary_data = [
+        ("参加者数", unique_count),
+        ("全体メンバー数", total_members),
+        ("参加率", f"{participation_rate:.1f}%"),
+        ("総投稿数", stats["total_posts"])
+    ]
+
+    # 最大行数を計算
+    max_rows = max(len(sorted_users), len(sorted_months), len(sorted_channel_months), len(summary_data))
+
+    # ヘッダー
+    writer.writerow([
+        "名前", "部署", "投稿回数",
+        "",
+        "月", "スレッド投稿数",
+        "",
+        "月", "チャンネル投稿数",
+        "",
+        "項目", "値"
+    ])
+
+    for i in range(max_rows):
+        row = []
+
+        # セクション1: ユーザー別
+        if i < len(sorted_users):
+            name, count = sorted_users[i]
+            dept = stats["user_departments"].get(name, "不明")
+            row.extend([name, dept, count])
+        else:
+            row.extend(["", "", ""])
+
+        row.append("")
+
+        # セクション2: 月別（スレッド）
+        if i < len(sorted_months):
+            month, count = sorted_months[i]
+            row.extend([month, count])
+        else:
+            row.extend(["", ""])
+
+        row.append("")
+
+        # セクション3: 月別（チャンネル）
+        if i < len(sorted_channel_months):
+            month, count = sorted_channel_months[i]
+            row.extend([month, count])
+        else:
+            row.extend(["", ""])
+
+        row.append("")
+
+        # セクション4: サマリー
+        if i < len(summary_data):
+            item, value = summary_data[i]
+            row.extend([item, value])
+        else:
+            row.extend(["", ""])
+
+        writer.writerow(row)
+
+    return output.getvalue()
+
+
+# =============================================================================
+# 本気AI: スラッシュコマンド
+# =============================================================================
+@tree.command(
+    name="ai_report",
+    description="本気AI提出の利用状況レポートを生成",
+    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None
+)
+@app_commands.describe(period="集計期間（例: 2024-01, last, -2, all）")
+async def ai_report_command(interaction: discord.Interaction, period: str):
+    """本気AIレポートコマンド"""
+    if interaction.user.id not in ALLOWED_USER_IDS:
+        await interaction.response.send_message("このコマンドを実行する権限がありません。", ephemeral=True)
+        return
+
+    parsed = parse_lunch_period(period)
+    if parsed is None:
+        await interaction.response.send_message(
+            "期間の形式が正しくありません。例: 2024-01, last, -2, all", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        guild = interaction.guild
+        if parsed == "all":
+            start_utc, end_utc = None, None
+            period_label = "全期間"
+            filename = "ai_report_all.csv"
+        else:
+            year, month = parsed
+            start_utc, end_utc = get_lunch_period_range(year, month)
+            period_label = f"{year}年{month}月"
+            filename = f"ai_report_{year}-{month:02d}.csv"
+
+        stats = await collect_ai_stats(guild, start_utc, end_utc)
+        if stats["total_posts"] == 0:
+            await interaction.followup.send(f"{period_label}の本気AI提出データがありません。", ephemeral=True)
+            return
+
+        # 全体メンバー数（Bot除外）
+        total_members = sum(1 for m in guild.members if not m.bot)
+        csv_content = generate_ai_csv(stats, total_members)
+
+        file = discord.File(io.BytesIO(csv_content.encode('utf-8-sig')), filename=filename)
+
+        unique_count = len(stats["unique_participants"])
+        participation_rate = (unique_count / total_members * 100) if total_members > 0 else 0
+        summary = (
+            f"**本気AI 提出状況レポート {period_label}**\n\n"
+            f"📊 総投稿数: {stats['total_posts']}回\n"
+            f"👥 参加者: {unique_count}人 / {total_members}人\n"
+            f"📈 参加率: {participation_rate:.1f}%"
         )
 
         try:

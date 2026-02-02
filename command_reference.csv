@@ -19,3 +19,13 @@
 ,-6,6ヶ月前,/lunch_report period:-6
 ,all / 全期間,全期間,/lunch_report period:all
 ,YYYY-MM,特定の月,/lunch_report period:2026-01
+
+,,,
+=== 本気AI提出 ===,,,
+/ai_report,period,本気AI提出の利用状況レポートを生成,/ai_report period:last
+,this / 今月 / 0,今月,/ai_report period:this
+,last / 先月 / -1,先月,/ai_report period:last
+,-2,2ヶ月前,/ai_report period:-2
+,-3,3ヶ月前,/ai_report period:-3
+,all / 全期間,全期間,/ai_report period:all
+,YYYY-MM,特定の月,/ai_report period:2026-01
