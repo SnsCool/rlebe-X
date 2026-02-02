@@ -789,18 +789,36 @@ def extract_name_from_nickname(nickname: str) -> str:
     return name
 
 
+def normalize_name(name: str) -> str:
+    """名前を正規化する（スペース除去、全角→半角）"""
+    # スペース除去（全角・半角）
+    normalized = name.replace(" ", "").replace("　", "").strip()
+    return normalized
+
+
 def find_member_by_name(guild: discord.Guild, form_name: str) -> discord.Member | None:
-    """フォームの名前からDiscordメンバーを検索する。"""
-    form_name_normalized = form_name.strip()
+    """フォームの名前からDiscordメンバーを検索する（マッチング甘め）"""
+    form_normalized = normalize_name(form_name)
+
     for member in guild.members:
         if member.bot:
             continue
         display = member.display_name or member.name
         extracted_name = extract_name_from_nickname(display)
-        if extracted_name == form_name_normalized:
+        extracted_normalized = normalize_name(extracted_name)
+
+        # 正規化後の完全一致
+        if extracted_normalized == form_normalized:
             return member
-        if form_name_normalized in display:
+
+        # 正規化後の部分一致
+        if form_normalized in extracted_normalized or extracted_normalized in form_normalized:
             return member
+
+        # 元の名前での部分一致
+        if form_name.strip() in display:
+            return member
+
     return None
 
 
