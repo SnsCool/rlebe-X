@@ -1137,9 +1137,9 @@ async def collect_ai_stats(
             oldest_first=True
         ):
             debug_count += 1
-            # Bot投稿も含める（フォーム連携の可能性）
-            # if message.author.bot:
-            #     continue
+            # Bot投稿は除外（人間の投稿のみカウント）
+            if message.author.bot:
+                continue
 
             user_id = message.author.id
             display_name = message.author.display_name
