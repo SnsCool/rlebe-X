@@ -783,16 +783,25 @@ def extract_departments_list(nickname: str) -> list[str]:
 
 def extract_name_from_nickname(nickname: str) -> str:
     """ニックネームから名前部分を抽出する。"""
-    name = re.sub(r'【.+?】', '', nickname).strip()
+    # 改行を除去
+    name = nickname.replace("\n", "").replace("\r", "")
+    # 【部署】を除去
+    name = re.sub(r'【.+?】', '', name).strip()
+    # （ニックネーム）を除去
     name = re.sub(r'（.+?）$', '', name).strip()
     name = re.sub(r'\(.+?\)$', '', name).strip()
     return name
 
 
 def normalize_name(name: str) -> str:
-    """名前を正規化する（スペース除去、全角→半角）"""
-    # スペース除去（全角・半角）
-    normalized = name.replace(" ", "").replace("　", "").strip()
+    """名前を正規化する（スペース・改行除去、Unicode正規化）"""
+    import unicodedata
+    # Unicode正規化（異体字などを統一）
+    normalized = unicodedata.normalize('NFKC', name)
+    # スペース・改行除去（全角・半角）
+    normalized = normalized.replace(" ", "").replace("　", "")
+    normalized = normalized.replace("\n", "").replace("\r", "")
+    normalized = normalized.strip()
     return normalized
 
 
