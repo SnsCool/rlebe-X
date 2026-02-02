@@ -855,8 +855,7 @@ async def collect_lunch_stats(
             limit=None,
             oldest_first=True
         ):
-            if EXCLUDE_BOTS and message.author.bot:
-                continue
+            # ランチ制度はBot投稿（フォーム連携）も集計対象
             parsed = parse_lunch_form(message.content)
             if not parsed:
                 continue
