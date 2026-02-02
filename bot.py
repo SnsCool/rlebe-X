@@ -1113,12 +1113,11 @@ async def collect_ai_stats(
     start_utc: datetime | None = None,
     end_utc: datetime | None = None
 ) -> dict:
-    """本気AI提出の統計を集計する。"""
+    """本気AI提出の統計を集計する（投稿者ベース）。"""
     # スレッドから投稿を取得（複数の方法で試行）
     thread = guild.get_thread(AI_THREAD_ID)
     if not thread:
         try:
-            # client.fetch_channel でアーカイブされたスレッドも取得
             thread = await client.fetch_channel(AI_THREAD_ID)
         except Exception as e:
             raise Exception(f"スレッド {AI_THREAD_ID} が見つかりません: {e}")
@@ -1126,8 +1125,8 @@ async def collect_ai_stats(
     user_counts = defaultdict(int)
     user_departments = {}
     unique_participants = set()
-    monthly_counts = defaultdict(int)  # YYYY-MM -> count
-    debug_count = 0  # デバッグ用
+    monthly_counts = defaultdict(int)
+    debug_count = 0
 
     try:
         async for message in thread.history(
@@ -1138,60 +1137,28 @@ async def collect_ai_stats(
         ):
             debug_count += 1
 
-            # フォーム回答からの名前抽出（Bot投稿）
+            # Bot投稿は除外、人間の投稿のみカウント
             if message.author.bot:
-                form_name_raw = None
-
-                # 形式1: 【フォーム回答】名前: xxx
-                if '【フォーム回答】' in message.content:
-                    match = re.search(r'名前:\s*(.+?)(?:\n|$)', message.content)
-                    if match:
-                        form_name_raw = match.group(1).strip()
-
-                # 形式2: フォームの入力がありました。【名前...】xxx
-                elif 'フォームの入力がありました' in message.content:
-                    # 【名前...】の後の行を取得
-                    match = re.search(r'【名前[^】]*】\s*\n?(.+?)(?:\n\n|\n【|$)', message.content, re.DOTALL)
-                    if match:
-                        form_name_raw = match.group(1).strip()
-
-                if form_name_raw:
-                    # 名前を正規化（スペース除去など）して同じ人を統一
-                    form_name = normalize_name(form_name_raw)
-                    user_counts[form_name] += 1
-                    unique_participants.add(form_name)
-
-                    # 部署を取得（Discordメンバーから検索）
-                    if form_name not in user_departments:
-                        member = find_member_by_name(guild, form_name_raw)
-                        if member:
-                            depts = extract_departments_list(member.display_name or member.name)
-                            user_departments[form_name] = depts
-                        else:
-                            user_departments[form_name] = ["不明"]
-
-                    # 月別カウント
-                    month_key = message.created_at.astimezone(JST).strftime("%Y-%m")
-                    monthly_counts[month_key] += 1
                 continue
 
-            # 人間の直接投稿
-            if not message.author.bot:
-                display_name = message.author.display_name
-                user_counts[display_name] += 1
-                unique_participants.add(display_name)
+            # 投稿者の表示名でカウント
+            display_name = message.author.display_name
+            user_counts[display_name] += 1
+            unique_participants.add(display_name)
 
-                if display_name not in user_departments:
-                    depts = extract_departments_list(message.author.display_name or message.author.name)
-                    user_departments[display_name] = depts
+            # 部署を取得
+            if display_name not in user_departments:
+                depts = extract_departments_list(message.author.display_name or message.author.name)
+                user_departments[display_name] = depts
 
-                month_key = message.created_at.astimezone(JST).strftime("%Y-%m")
-                monthly_counts[month_key] += 1
+            # 月別カウント
+            month_key = message.created_at.astimezone(JST).strftime("%Y-%m")
+            monthly_counts[month_key] += 1
 
     except discord.Forbidden:
         raise Exception(f"スレッド <#{AI_THREAD_ID}> の履歴を読む権限がありません。")
 
-    # チャンネルからも投稿数を取得
+    # チャンネルからも投稿数を取得（Bot除外）
     channel = guild.get_channel(AI_CHANNEL_ID)
     if not channel:
         try:
@@ -1210,7 +1177,9 @@ async def collect_ai_stats(
                 oldest_first=True
             ):
                 channel_debug_count += 1
-                # Bot投稿も含める
+                # Bot投稿は除外
+                if message.author.bot:
+                    continue
                 month_key = message.created_at.astimezone(JST).strftime("%Y-%m")
                 channel_monthly_counts[month_key] += 1
         except discord.Forbidden:
