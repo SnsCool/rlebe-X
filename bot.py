@@ -1143,13 +1143,15 @@ async def collect_ai_stats(
                 # 「名前:」の後の値を抽出
                 match = re.search(r'名前:\s*(.+?)(?:\n|$)', message.content)
                 if match:
-                    form_name = match.group(1).strip()
+                    form_name_raw = match.group(1).strip()
+                    # 名前を正規化（スペース除去など）して同じ人を統一
+                    form_name = normalize_name(form_name_raw)
                     user_counts[form_name] += 1
                     unique_participants.add(form_name)
 
                     # 部署を取得（Discordメンバーから検索）
                     if form_name not in user_departments:
-                        member = find_member_by_name(guild, form_name)
+                        member = find_member_by_name(guild, form_name_raw)
                         if member:
                             depts = extract_departments_list(member.display_name or member.name)
                             user_departments[form_name] = depts
