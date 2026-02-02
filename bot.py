@@ -1137,23 +1137,42 @@ async def collect_ai_stats(
             oldest_first=True
         ):
             debug_count += 1
-            # Bot投稿は除外（人間の投稿のみカウント）
-            if message.author.bot:
+
+            # フォーム回答からの名前抽出（Bot投稿）
+            if message.author.bot and '【フォーム回答】' in message.content:
+                # 「名前:」の後の値を抽出
+                match = re.search(r'名前:\s*(.+?)(?:\n|$)', message.content)
+                if match:
+                    form_name = match.group(1).strip()
+                    user_counts[form_name] += 1
+                    unique_participants.add(form_name)
+
+                    # 部署を取得（Discordメンバーから検索）
+                    if form_name not in user_departments:
+                        member = find_member_by_name(guild, form_name)
+                        if member:
+                            depts = extract_departments_list(member.display_name or member.name)
+                            user_departments[form_name] = depts
+                        else:
+                            user_departments[form_name] = ["不明"]
+
+                    # 月別カウント
+                    month_key = message.created_at.astimezone(JST).strftime("%Y-%m")
+                    monthly_counts[month_key] += 1
                 continue
 
-            user_id = message.author.id
-            display_name = message.author.display_name
-            user_counts[display_name] += 1
-            unique_participants.add(display_name)
+            # 人間の直接投稿
+            if not message.author.bot:
+                display_name = message.author.display_name
+                user_counts[display_name] += 1
+                unique_participants.add(display_name)
 
-            # 部署を取得
-            if display_name not in user_departments:
-                dept = get_member_department(message.author)
-                user_departments[display_name] = dept
+                if display_name not in user_departments:
+                    depts = extract_departments_list(message.author.display_name or message.author.name)
+                    user_departments[display_name] = depts
 
-            # 月別カウント
-            month_key = message.created_at.astimezone(JST).strftime("%Y-%m")
-            monthly_counts[month_key] += 1
+                month_key = message.created_at.astimezone(JST).strftime("%Y-%m")
+                monthly_counts[month_key] += 1
 
     except discord.Forbidden:
         raise Exception(f"スレッド <#{AI_THREAD_ID}> の履歴を読む権限がありません。")
@@ -1234,8 +1253,15 @@ def generate_ai_csv(stats: dict, total_members: int) -> str:
         # セクション1: ユーザー別
         if i < len(sorted_users):
             name, count = sorted_users[i]
-            dept = stats["user_departments"].get(name, "不明")
-            row.extend([name, dept, count])
+            depts = stats["user_departments"].get(name, ["不明"])
+            # 複数部署の場合、名前と部署をセル内改行で表示
+            if isinstance(depts, list) and len(depts) > 1:
+                name_cell = "\n".join([name] * len(depts))
+                dept_cell = "\n".join(depts)
+            else:
+                name_cell = name
+                dept_cell = depts[0] if isinstance(depts, list) else depts
+            row.extend([name_cell, dept_cell, count])
         else:
             row.extend(["", "", ""])
 
