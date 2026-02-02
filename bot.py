@@ -11,6 +11,7 @@ import json
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from collections import defaultdict
 
 import discord
 from discord import app_commands
@@ -21,7 +22,8 @@ import google.generativeai as genai
 # 設定値
 # =============================================================================
 GUILD_ID = 1172020927047942154
-CHANNEL_IDS = [1448981729938247710]
+CHANNEL_IDS = [1448981729938247710]  # レベッター（❤️集計）
+LUNCH_CHANNEL_ID = 1437763696096182363  # ランチ制度フォーム投稿チャンネル
 ALLOWED_USER_IDS = [1340666940615823451, 1307922048731058247]
 HEART_EMOJI = "❤️"
 EXCLUDE_BOTS = True
@@ -748,6 +750,301 @@ async def on_message(message: discord.Message):
         )
     except discord.Forbidden:
         print("DM failed: user has DMs disabled.")
+
+
+# =============================================================================
+# ランチ制度: 部署抽出
+# =============================================================================
+def extract_department_from_nickname(nickname: str) -> str | None:
+    """
+    ニックネームから部署を抽出する。
+    形式: 【部署名】名前（ニックネーム）
+    """
+    match = re.match(r'【(.+?)】', nickname)
+    return match.group(1) if match else None
+
+
+def extract_name_from_nickname(nickname: str) -> str:
+    """ニックネームから名前部分を抽出する。"""
+    name = re.sub(r'【.+?】', '', nickname).strip()
+    name = re.sub(r'（.+?）$', '', name).strip()
+    name = re.sub(r'\(.+?\)$', '', name).strip()
+    return name
+
+
+def find_member_by_name(guild: discord.Guild, form_name: str) -> discord.Member | None:
+    """フォームの名前からDiscordメンバーを検索する。"""
+    form_name_normalized = form_name.strip()
+    for member in guild.members:
+        if member.bot:
+            continue
+        display = member.display_name or member.name
+        extracted_name = extract_name_from_nickname(display)
+        if extracted_name == form_name_normalized:
+            return member
+        if form_name_normalized in display:
+            return member
+    return None
+
+
+def get_member_department(member: discord.Member) -> str:
+    """メンバーの部署を取得"""
+    display = member.display_name or member.name
+    dept = extract_department_from_nickname(display)
+    return dept if dept else "不明"
+
+
+# =============================================================================
+# ランチ制度: フォームパーサー
+# =============================================================================
+def parse_lunch_form(content: str) -> dict | None:
+    """フォーム投稿からランチ制度データを抽出する。"""
+    if '【代表者名】' not in content:
+        return None
+    try:
+        result = {}
+        match = re.search(r'【代表者名】\s*\n(.+?)(?=\n【|$)', content, re.DOTALL)
+        result["representative"] = match.group(1).strip() if match else ""
+        match = re.search(r'【代表者の所属部署】\s*\n(.+?)(?=\n【|$)', content, re.DOTALL)
+        result["department"] = match.group(1).strip() if match else ""
+        match = re.search(r'【ランチ実施日】\s*\n(.+?)(?=\n【|$)', content, re.DOTALL)
+        result["date"] = match.group(1).strip() if match else ""
+        match = re.search(r'【参加人数】\s*\n(\d+)', content)
+        result["participant_count"] = int(match.group(1)) if match else 0
+        match = re.search(r'【参加メンバー】\s*\n(.+?)(?=\n【|$)', content, re.DOTALL)
+        if match:
+            members_text = match.group(1).strip()
+            result["participants"] = [m.strip() for m in members_text.split('\n') if m.strip()]
+        else:
+            result["participants"] = []
+        match = re.search(r'【合計金額（税込）】\s*\n(\d+)', content)
+        result["total_amount"] = int(match.group(1)) if match else 0
+        match = re.search(r'【ランチ会議の感想をひとこと】\s*\n(.+?)(?=\n【|$)', content, re.DOTALL)
+        result["comment"] = match.group(1).strip() if match else ""
+        if not result["representative"] or not result["participants"]:
+            return None
+        return result
+    except Exception:
+        return None
+
+
+# =============================================================================
+# ランチ制度: 集計関数
+# =============================================================================
+async def collect_lunch_stats(
+    guild: discord.Guild,
+    start_utc: datetime | None = None,
+    end_utc: datetime | None = None
+) -> dict:
+    """ランチ制度の利用状況を集計する。"""
+    channel = guild.get_channel(LUNCH_CHANNEL_ID)
+    if not channel or not isinstance(channel, discord.TextChannel):
+        raise Exception(f"チャンネル {LUNCH_CHANNEL_ID} が見つかりません。")
+
+    records = []
+    user_counts = defaultdict(int)
+    user_departments = {}
+    dept_counts = defaultdict(int)
+    total_amount = 0
+    unique_participants = set()
+
+    try:
+        async for message in channel.history(
+            after=start_utc,
+            before=end_utc,
+            limit=None,
+            oldest_first=True
+        ):
+            if EXCLUDE_BOTS and message.author.bot:
+                continue
+            parsed = parse_lunch_form(message.content)
+            if not parsed:
+                continue
+            records.append({**parsed, "message_id": message.id, "posted_at": message.created_at})
+            for participant in parsed["participants"]:
+                user_counts[participant] += 1
+                unique_participants.add(participant)
+                if participant not in user_departments:
+                    member = find_member_by_name(guild, participant)
+                    if member:
+                        user_departments[participant] = get_member_department(member)
+                    else:
+                        user_departments[participant] = "不明"
+                dept_counts[user_departments.get(participant, "不明")] += 1
+            total_amount += parsed["total_amount"]
+    except discord.Forbidden:
+        raise Exception(f"チャンネル <#{LUNCH_CHANNEL_ID}> の履歴を読む権限がありません。")
+
+    return {
+        "records": records,
+        "user_departments": user_departments,
+        "dept_counts": dict(dept_counts),
+        "user_counts": dict(user_counts),
+        "total_events": len(records),
+        "total_participants": sum(len(r["participants"]) for r in records),
+        "unique_participants": unique_participants,
+        "total_amount": total_amount
+    }
+
+
+def generate_lunch_csv(stats: dict, total_members: int) -> str:
+    """ランチ制度集計結果をCSV形式で出力"""
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    unique_count = len(stats["unique_participants"])
+    usage_rate = (unique_count / total_members * 100) if total_members > 0 else 0
+
+    sorted_users = sorted(stats["user_counts"].items(), key=lambda x: (-x[1], x[0]))
+    sorted_depts = sorted(stats["dept_counts"].items(), key=lambda x: (-x[1], x[0]))
+    summary_data = [
+        ("チャンネルメンバー数", total_members),
+        ("利用者数", unique_count),
+        ("利用率", f"{usage_rate:.1f}%")
+    ]
+
+    max_rows = max(len(sorted_users), len(sorted_depts), len(summary_data))
+
+    writer.writerow(["名前", "部署", "参加回数", "", "部署", "部署別参加回数", "", "項目", "値"])
+
+    for i in range(max_rows):
+        row = []
+        if i < len(sorted_users):
+            name, count = sorted_users[i]
+            dept = stats["user_departments"].get(name, "不明")
+            row.extend([name, dept, count])
+        else:
+            row.extend(["", "", ""])
+        row.append("")
+        if i < len(sorted_depts):
+            dept_name, dept_count = sorted_depts[i]
+            row.extend([dept_name, dept_count])
+        else:
+            row.extend(["", ""])
+        row.append("")
+        if i < len(summary_data):
+            item, value = summary_data[i]
+            row.extend([item, value])
+        else:
+            row.extend(["", ""])
+        writer.writerow(row)
+
+    return output.getvalue()
+
+
+# =============================================================================
+# ランチ制度: 期間パース
+# =============================================================================
+def parse_lunch_period(period: str) -> tuple[int, int] | str | None:
+    """
+    期間文字列をパースして (year, month) または "all" を返す。
+    対応: "2024-01", "last", "this", "-1"〜"-N", "all"
+    """
+    period_lower = period.lower().strip()
+    now = datetime.now(JST)
+
+    if period_lower in ("all", "全期間"):
+        return "all"
+    if period_lower in ("last", "先月", "-1"):
+        if now.month == 1:
+            return (now.year - 1, 12)
+        return (now.year, now.month - 1)
+    if period_lower in ("this", "今月", "0"):
+        return (now.year, now.month)
+    match = re.match(r'^-(\d+)$', period_lower)
+    if match:
+        months_ago = int(match.group(1))
+        year, month = now.year, now.month - months_ago
+        while month <= 0:
+            month += 12
+            year -= 1
+        return (year, month)
+    match = re.match(r'^(\d{4})-(\d{2})$', period)
+    if match:
+        return (int(match.group(1)), int(match.group(2)))
+    return None
+
+
+def get_lunch_period_range(year: int, month: int) -> tuple[datetime, datetime]:
+    """指定年月の開始・終了日時をUTCで返す"""
+    start_jst = datetime(year, month, 1, 0, 0, 0, tzinfo=JST)
+    if month == 12:
+        end_jst = datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=JST)
+    else:
+        end_jst = datetime(year, month + 1, 1, 0, 0, 0, tzinfo=JST)
+    return start_jst.astimezone(UTC), end_jst.astimezone(UTC)
+
+
+# =============================================================================
+# ランチ制度: スラッシュコマンド
+# =============================================================================
+@tree.command(
+    name="lunch_report",
+    description="ランチ制度の利用状況レポートを生成",
+    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None
+)
+@app_commands.describe(period="集計期間（例: 2024-01, last, -2, all）")
+async def lunch_report_command(interaction: discord.Interaction, period: str):
+    """ランチ制度レポートコマンド"""
+    if interaction.user.id not in ALLOWED_USER_IDS:
+        await interaction.response.send_message("このコマンドを実行する権限がありません。", ephemeral=True)
+        return
+
+    parsed = parse_lunch_period(period)
+    if parsed is None:
+        await interaction.response.send_message(
+            "期間の形式が正しくありません。例: 2024-01, last, -2, all", ephemeral=True
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        guild = interaction.guild
+        if parsed == "all":
+            start_utc, end_utc = None, None
+            period_label = "全期間"
+            filename = "lunch_report_all.csv"
+        else:
+            year, month = parsed
+            start_utc, end_utc = get_lunch_period_range(year, month)
+            period_label = f"{year}年{month}月"
+            filename = f"lunch_report_{year}-{month:02d}.csv"
+
+        lunch_channel = guild.get_channel(LUNCH_CHANNEL_ID)
+        if not lunch_channel:
+            await interaction.followup.send("ランチチャンネルが見つかりません。", ephemeral=True)
+            return
+
+        stats = await collect_lunch_stats(guild, start_utc, end_utc)
+        if stats["total_events"] == 0:
+            await interaction.followup.send(f"{period_label}のランチ制度利用データがありません。", ephemeral=True)
+            return
+
+        channel_members = [m for m in lunch_channel.members if not m.bot]
+        total_members = len(channel_members)
+        csv_content = generate_lunch_csv(stats, total_members)
+
+        file = discord.File(io.BytesIO(csv_content.encode('utf-8-sig')), filename=filename)
+
+        unique_count = len(stats["unique_participants"])
+        usage_rate = (unique_count / total_members * 100) if total_members > 0 else 0
+        summary = (
+            f"**ランチ制度 利用状況レポート {period_label}**\n\n"
+            f"📊 イベント数: {stats['total_events']}回\n"
+            f"👥 利用者: {unique_count}人 / チャンネルメンバー {total_members}人\n"
+            f"📈 利用率: {usage_rate:.1f}%\n"
+            f"💰 総金額: ¥{stats['total_amount']:,}"
+        )
+
+        try:
+            await interaction.user.send(summary, file=file)
+            await interaction.followup.send("レポートをDMに送信しました。", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.followup.send("DMを送信できませんでした。DM設定を確認してください。", ephemeral=True)
+
+    except Exception as e:
+        await interaction.followup.send(f"エラーが発生しました: {e}", ephemeral=True)
 
 
 # =============================================================================

@@ -1,0 +1,21 @@
+コマンド,パラメータ,説明,入力例
+
+=== レベッター（❤️集計）===,,,
+/report,period,❤️リアクション数と投稿数を集計,/report period:last
+,last,先月（デフォルト）,
+,all,全期間,
+,YYYY-MM,特定の月,/report period:2026-01
+
+/ask,query,自然言語で集計を依頼（AI対応）,/ask query:先月のレポート
+,,田中さんのいいね数を照会,/ask query:田中さんのいいね数
+
+,,,
+=== ランチ制度 ===,,,
+/lunch_report,period,ランチ制度の利用状況レポートを生成,/lunch_report period:last
+,this / 今月 / 0,今月,/lunch_report period:this
+,last / 先月 / -1,先月,/lunch_report period:last
+,-2,2ヶ月前,/lunch_report period:-2
+,-3,3ヶ月前,/lunch_report period:-3
+,-6,6ヶ月前,/lunch_report period:-6
+,all / 全期間,全期間,/lunch_report period:all
+,YYYY-MM,特定の月,/lunch_report period:2026-01
