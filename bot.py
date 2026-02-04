@@ -1325,6 +1325,14 @@ async def ai_report_command(interaction: discord.Interaction, period: str):
             period_label = f"{year}年{month}月"
             filename = f"ai_report_{year}-{month:02d}.csv"
 
+        # 期間を明確に表示
+        if start_utc and end_utc:
+            start_jst = start_utc.astimezone(JST)
+            end_jst = end_utc.astimezone(JST)
+            period_range = f"{start_jst.strftime('%Y-%m-%d')} 〜 {end_jst.strftime('%Y-%m-%d')}"
+        else:
+            period_range = "全期間"
+
         stats = await collect_ai_stats(guild, start_utc, end_utc)
         if stats["total_posts"] == 0:
             debug_info = (
@@ -1334,7 +1342,7 @@ async def ai_report_command(interaction: discord.Interaction, period: str):
             sample = stats.get('debug_sample', '')
             sample_info = f"\nサンプル: {sample}" if sample else ""
             await interaction.followup.send(
-                f"{period_label}の本気AI提出データがありません。\n({debug_info}){sample_info}",
+                f"{period_label}（{period_range}）の本気AI提出データがありません。\n({debug_info}){sample_info}",
                 ephemeral=True
             )
             return
@@ -1348,7 +1356,8 @@ async def ai_report_command(interaction: discord.Interaction, period: str):
         unique_count = len(stats["unique_participants"])
         participation_rate = (unique_count / total_members * 100) if total_members > 0 else 0
         summary = (
-            f"**本気AI 提出状況レポート {period_label}**\n\n"
+            f"**本気AI 提出状況レポート {period_label}**\n"
+            f"📅 期間: {period_range}\n\n"
             f"📊 総投稿数: {stats['total_posts']}回\n"
             f"👥 参加者: {unique_count}人 / {total_members}人\n"
             f"📈 参加率: {participation_rate:.1f}%"
