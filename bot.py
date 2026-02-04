@@ -1127,7 +1127,8 @@ async def collect_ai_stats(
     unique_participants = set()
     monthly_counts = defaultdict(int)
     debug_count = 0
-    debug_sample = None  # 最初のメッセージをデバッグ用に保存
+    debug_matched = 0
+    debug_unmatched_samples = []  # マッチしなかったメッセージのサンプル
 
     try:
         async for message in thread.history(
@@ -1137,34 +1138,49 @@ async def collect_ai_stats(
             oldest_first=True
         ):
             debug_count += 1
-
-            # 最初のメッセージをデバッグ用に保存
-            if debug_count == 1:
-                debug_sample = message.content[:200]
-
-            # メッセージ内容から「名前:」を抽出（複数パターン対応）
             content = message.content
+
+            # メッセージ内容から「名前」を含む行を抽出（より柔軟に）
+            # パターン1: 名前: xxx または 名前：xxx
+            # パターン2: 【名前】xxx
+            name = None
+
+            # パターン1: 名前: or 名前：
             name_match = re.search(r'名前\s*[:：]\s*(.+?)(?:\n|$)', content)
             if name_match:
-                raw_name = name_match.group(1).strip()
+                name = name_match.group(1).strip()
+
+            # パターン2: 【名前】の次の行
+            if not name:
+                name_match = re.search(r'【名前[^】]*】\s*\n?(.+?)(?:\n|$)', content)
+                if name_match:
+                    name = name_match.group(1).strip()
+
+            if name:
+                debug_matched += 1
+                raw_name = name
                 # 名前を正規化
-                name = normalize_name(raw_name)
-                if name:
-                    user_counts[name] += 1
-                    unique_participants.add(name)
+                normalized_name = normalize_name(raw_name)
+                if normalized_name:
+                    user_counts[normalized_name] += 1
+                    unique_participants.add(normalized_name)
 
                     # 部署を取得（Discordメンバーから検索）
-                    if name not in user_departments:
+                    if normalized_name not in user_departments:
                         member = find_member_by_name(guild, raw_name)
                         if member:
                             depts = extract_departments_list(member.display_name or member.name)
-                            user_departments[name] = depts
+                            user_departments[normalized_name] = depts
                         else:
-                            user_departments[name] = ["不明"]
+                            user_departments[normalized_name] = ["不明"]
 
                     # 月別カウント
                     month_key = message.created_at.astimezone(JST).strftime("%Y-%m")
                     monthly_counts[month_key] += 1
+            else:
+                # マッチしなかったメッセージをサンプル保存（最大3件）
+                if len(debug_unmatched_samples) < 3:
+                    debug_unmatched_samples.append(content[:150])
 
     except discord.Forbidden:
         raise Exception(f"スレッド <#{AI_THREAD_ID}> の履歴を読む権限がありません。")
@@ -1201,8 +1217,9 @@ async def collect_ai_stats(
         "channel_monthly_counts": dict(channel_monthly_counts),
         "total_posts": sum(user_counts.values()),
         "debug_thread_messages": debug_count,
+        "debug_matched": debug_matched,
         "debug_channel_messages": channel_debug_count,
-        "debug_sample": debug_sample
+        "debug_unmatched_samples": debug_unmatched_samples
     }
 
 
@@ -1337,10 +1354,13 @@ async def ai_report_command(interaction: discord.Interaction, period: str):
         if stats["total_posts"] == 0:
             debug_info = (
                 f"スレッド読取数: {stats.get('debug_thread_messages', 0)}, "
+                f"マッチ数: {stats.get('debug_matched', 0)}, "
                 f"チャンネル読取数: {stats.get('debug_channel_messages', 0)}"
             )
-            sample = stats.get('debug_sample', '')
-            sample_info = f"\nサンプル: {sample}" if sample else ""
+            unmatched = stats.get('debug_unmatched_samples', [])
+            sample_info = ""
+            if unmatched:
+                sample_info = "\n\n**マッチしなかったサンプル:**\n" + "\n---\n".join(unmatched[:2])
             await interaction.followup.send(
                 f"{period_label}（{period_range}）の本気AI提出データがありません。\n({debug_info}){sample_info}",
                 ephemeral=True
