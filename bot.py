@@ -1127,6 +1127,7 @@ async def collect_ai_stats(
     unique_participants = set()
     monthly_counts = defaultdict(int)
     debug_count = 0
+    debug_sample = None  # 最初のメッセージをデバッグ用に保存
 
     try:
         async for message in thread.history(
@@ -1137,9 +1138,13 @@ async def collect_ai_stats(
         ):
             debug_count += 1
 
-            # メッセージ内容から「名前:」を抽出
+            # 最初のメッセージをデバッグ用に保存
+            if debug_count == 1:
+                debug_sample = message.content[:200]
+
+            # メッセージ内容から「名前:」を抽出（複数パターン対応）
             content = message.content
-            name_match = re.search(r'名前[:：]\s*(.+?)(?:\n|$)', content)
+            name_match = re.search(r'名前\s*[:：]\s*(.+?)(?:\n|$)', content)
             if name_match:
                 raw_name = name_match.group(1).strip()
                 # 名前を正規化
@@ -1196,7 +1201,8 @@ async def collect_ai_stats(
         "channel_monthly_counts": dict(channel_monthly_counts),
         "total_posts": sum(user_counts.values()),
         "debug_thread_messages": debug_count,
-        "debug_channel_messages": channel_debug_count
+        "debug_channel_messages": channel_debug_count,
+        "debug_sample": debug_sample
     }
 
 
@@ -1325,8 +1331,10 @@ async def ai_report_command(interaction: discord.Interaction, period: str):
                 f"スレッド読取数: {stats.get('debug_thread_messages', 0)}, "
                 f"チャンネル読取数: {stats.get('debug_channel_messages', 0)}"
             )
+            sample = stats.get('debug_sample', '')
+            sample_info = f"\nサンプル: {sample}" if sample else ""
             await interaction.followup.send(
-                f"{period_label}の本気AI提出データがありません。\n({debug_info})",
+                f"{period_label}の本気AI提出データがありません。\n({debug_info}){sample_info}",
                 ephemeral=True
             )
             return
