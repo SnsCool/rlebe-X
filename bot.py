@@ -1145,7 +1145,8 @@ async def collect_ai_stats(
 
             # パターン1: 【名前...(説明)】の後の行（メインパターン）
             # 例: 【名前\n(半角スペースを空けずにフルネームを記載)】\n工藤慶人
-            name_match = re.search(r'【名前[^】]*】\s*\n?([^\n【]+)', content)
+            # [\s\S]*? で改行を含む任意の文字にマッチ
+            name_match = re.search(r'【名前[\s\S]*?】\s*\n?([^\n【]+)', content)
             if name_match:
                 extracted = name_match.group(1).strip()
                 # 明らかに名前でないものを除外
