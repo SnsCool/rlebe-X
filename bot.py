@@ -1141,20 +1141,27 @@ async def collect_ai_stats(
             content = message.content
 
             # メッセージ内容から「名前」を含む行を抽出（より柔軟に）
-            # パターン1: 名前: xxx または 名前：xxx
-            # パターン2: 【名前】xxx
             name = None
 
-            # パターン1: 名前: or 名前：
+            # パターン1: 名前: xxx または 名前：xxx（コロンあり）
             name_match = re.search(r'名前\s*[:：]\s*(.+?)(?:\n|$)', content)
             if name_match:
                 name = name_match.group(1).strip()
 
-            # パターン2: 【名前】の次の行
+            # パターン2: 【名前】の後（改行あり・なし両対応）
             if not name:
-                name_match = re.search(r'【名前[^】]*】\s*\n?(.+?)(?:\n|$)', content)
+                name_match = re.search(r'【名前[^】]*】\s*\n?(.+?)(?:\n\n|\n【|$)', content, re.DOTALL)
                 if name_match:
                     name = name_match.group(1).strip()
+
+            # パターン3: 名前の後に何かある（コロンなし）
+            if not name:
+                name_match = re.search(r'名前[^\S\n]*[:\s：]*\s*(.+?)(?:\n|$)', content)
+                if name_match:
+                    extracted = name_match.group(1).strip()
+                    # 明らかに名前でないものを除外
+                    if extracted and len(extracted) < 30 and not extracted.startswith('http'):
+                        name = extracted
 
             if name:
                 debug_matched += 1
