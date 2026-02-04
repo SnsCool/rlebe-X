@@ -1143,24 +1143,27 @@ async def collect_ai_stats(
             # メッセージ内容から「名前」を含む行を抽出（より柔軟に）
             name = None
 
-            # パターン1: 名前: xxx または 名前：xxx（コロンあり）
-            name_match = re.search(r'名前\s*[:：]\s*(.+?)(?:\n|$)', content)
+            # パターン1: 【名前...(説明)】の後の行（メインパターン）
+            # 例: 【名前\n(半角スペースを空けずにフルネームを記載)】\n工藤慶人
+            name_match = re.search(r'【名前[^】]*】\s*\n?([^\n【]+)', content)
             if name_match:
-                name = name_match.group(1).strip()
+                extracted = name_match.group(1).strip()
+                # 明らかに名前でないものを除外
+                if extracted and len(extracted) < 30 and not extracted.startswith('http') and not extracted.startswith('('):
+                    name = extracted
 
-            # パターン2: 【名前】の後（改行あり・なし両対応）
+            # パターン2: 名前: xxx または 名前：xxx（コロンあり）
             if not name:
-                name_match = re.search(r'【名前[^】]*】\s*\n?(.+?)(?:\n\n|\n【|$)', content, re.DOTALL)
+                name_match = re.search(r'名前\s*[:：]\s*(.+?)(?:\n|$)', content)
                 if name_match:
                     name = name_match.group(1).strip()
 
-            # パターン3: 名前の後に何かある（コロンなし）
+            # パターン3: フォールバック - 名前の後の任意テキスト
             if not name:
                 name_match = re.search(r'名前[^\S\n]*[:\s：]*\s*(.+?)(?:\n|$)', content)
                 if name_match:
                     extracted = name_match.group(1).strip()
-                    # 明らかに名前でないものを除外
-                    if extracted and len(extracted) < 30 and not extracted.startswith('http'):
+                    if extracted and len(extracted) < 30 and not extracted.startswith('http') and not extracted.startswith('('):
                         name = extracted
 
             if name:
