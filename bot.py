@@ -1140,28 +1140,21 @@ async def collect_ai_stats(
             debug_count += 1
             content = message.content
 
-            # メッセージ内容から「名前」を含む行を抽出（より柔軟に）
+            # メッセージ内容から「名前」を含む行を抽出（2つのフォーマットに対応）
             name = None
 
-            # パターン1: 【名前...(説明)】の後の行（メインパターン）
-            # 例: 【名前\n(半角スペースを空けずにフルネームを記載)】\n工藤慶人
-            # [\s\S]*? で改行を含む任意の文字にマッチ
-            name_match = re.search(r'【名前[\s\S]*?】\s*\n?([^\n【]+)', content)
+            # パターン1: 名前: xxx（新フォーマット 2026年1月〜）
+            # 例: 名前: 中田菜々子
+            name_match = re.search(r'名前\s*[:：]\s*([^\n]+)', content)
             if name_match:
                 extracted = name_match.group(1).strip()
-                # 明らかに名前でないものを除外
-                if extracted and len(extracted) < 30 and not extracted.startswith('http') and not extracted.startswith('('):
+                if extracted and len(extracted) < 30 and not extracted.startswith('http'):
                     name = extracted
 
-            # パターン2: 名前: xxx または 名前：xxx（コロンあり）
+            # パターン2: 【名前...(説明)】の後の行（旧フォーマット 〜2025年12月）
+            # 例: 【名前\n(半角スペースを空けずにフルネームを記載)】\n久保梨生
             if not name:
-                name_match = re.search(r'名前\s*[:：]\s*(.+?)(?:\n|$)', content)
-                if name_match:
-                    name = name_match.group(1).strip()
-
-            # パターン3: フォールバック - 名前の後の任意テキスト
-            if not name:
-                name_match = re.search(r'名前[^\S\n]*[:\s：]*\s*(.+?)(?:\n|$)', content)
+                name_match = re.search(r'【名前[\s\S]*?】\s*\n?([^\n【]+)', content)
                 if name_match:
                     extracted = name_match.group(1).strip()
                     if extracted and len(extracted) < 30 and not extracted.startswith('http') and not extracted.startswith('('):
