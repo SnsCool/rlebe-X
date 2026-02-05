@@ -1503,6 +1503,7 @@ if __name__ == "__main__":
         exit(1)
 
     # Gemini初期化
+    global ai_model
     ai_model = init_gemini()
     print("Gemini API initialized")
 
