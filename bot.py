@@ -44,10 +44,39 @@ def init_gemini():
     api_key = os.environ.get("GEMINI_API_KEY")
     if api_key:
         genai.configure(api_key=api_key)
-        return genai.GenerativeModel("gemini-2.5-flash")
+        return genai.GenerativeModel("gemini-3-flash-preview")
     return None
 
 ai_model = None  # 起動時に初期化
+
+
+def extract_name_with_ai(content: str) -> str | None:
+    """AIを使ってメッセージから名前を抽出する"""
+    if ai_model is None:
+        return None
+
+    prompt = f"""以下のメッセージから人の名前（フルネーム）を1つだけ抽出してください。
+名前のみを出力してください。余計な説明は不要です。
+名前が見つからない場合は「なし」と出力してください。
+
+メッセージ:
+{content[:500]}
+
+名前:"""
+
+    try:
+        response = ai_model.generate_content(prompt)
+        result = response.text.strip()
+        # 「なし」や空の場合はNone
+        if result in ["なし", "なし。", "", "不明"]:
+            return None
+        # 長すぎる場合は名前ではない
+        if len(result) > 20:
+            return None
+        return result
+    except Exception as e:
+        print(f"AI name extraction error: {e}")
+        return None
 
 
 # =============================================================================
@@ -1140,25 +1169,8 @@ async def collect_ai_stats(
             debug_count += 1
             content = message.content
 
-            # メッセージ内容から「名前」を含む行を抽出（2つのフォーマットに対応）
-            name = None
-
-            # パターン1: 名前: xxx（新フォーマット 2026年1月〜）
-            # 例: 名前: 中田菜々子
-            name_match = re.search(r'名前\s*[:：]\s*([^\n]+)', content)
-            if name_match:
-                extracted = name_match.group(1).strip()
-                if extracted and len(extracted) < 30 and not extracted.startswith('http'):
-                    name = extracted
-
-            # パターン2: 【名前...(説明)】の後の行（旧フォーマット 〜2025年12月）
-            # 例: 【名前\n(半角スペースを空けずにフルネームを記載)】\n久保梨生
-            if not name:
-                name_match = re.search(r'【名前[\s\S]*?】\s*\n?([^\n【]+)', content)
-                if name_match:
-                    extracted = name_match.group(1).strip()
-                    if extracted and len(extracted) < 30 and not extracted.startswith('http') and not extracted.startswith('('):
-                        name = extracted
+            # AIを使って名前を抽出（どんなフォーマットでも対応）
+            name = extract_name_with_ai(content)
 
             if name:
                 debug_matched += 1
