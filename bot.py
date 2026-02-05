@@ -44,7 +44,7 @@ def init_gemini():
     api_key = os.environ.get("GEMINI_API_KEY")
     if api_key:
         genai.configure(api_key=api_key)
-        return genai.GenerativeModel("gemini-3-flash-preview")
+        return genai.GenerativeModel("gemini-2.5-flash")
     return None
 
 ai_model = None  # 起動時に初期化
