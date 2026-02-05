@@ -50,9 +50,11 @@ def init_gemini():
 ai_model = None  # 起動時に初期化
 
 
-def extract_name_with_ai(content: str) -> str | None:
+def extract_name_with_ai(content: str, debug: bool = False) -> str | None:
     """AIを使ってメッセージから名前を抽出する"""
     if ai_model is None:
+        if debug:
+            print("DEBUG: ai_model is None")
         return None
 
     prompt = f"""以下のメッセージから人の名前（フルネーム）を1つだけ抽出してください。
@@ -67,11 +69,17 @@ def extract_name_with_ai(content: str) -> str | None:
     try:
         response = ai_model.generate_content(prompt)
         result = response.text.strip()
+
+        if debug:
+            print(f"DEBUG AI response: '{result}' from content: '{content[:100]}...'")
+
         # 「なし」や空の場合はNone
         if result in ["なし", "なし。", "", "不明"]:
             return None
         # 長すぎる場合は名前ではない
         if len(result) > 20:
+            if debug:
+                print(f"DEBUG: Name too long: '{result}'")
             return None
         return result
     except Exception as e:
@@ -1170,13 +1178,19 @@ async def collect_ai_stats(
             content = message.content
 
             # AIを使って名前を抽出（どんなフォーマットでも対応）
-            name = extract_name_with_ai(content)
+            # 最初の10件はデバッグログを出力
+            enable_debug = debug_count <= 10
+            name = extract_name_with_ai(content, debug=enable_debug)
 
             if name:
                 debug_matched += 1
                 raw_name = name
                 # 名前を正規化
                 normalized_name = normalize_name(raw_name)
+
+                # デバッグ: 正規化前後を表示
+                if enable_debug:
+                    print(f"DEBUG: raw='{raw_name}' -> normalized='{normalized_name}'")
                 if normalized_name:
                     user_counts[normalized_name] += 1
                     unique_participants.add(normalized_name)
