@@ -52,9 +52,11 @@ ai_model = None  # 起動時に初期化
 
 def extract_name_with_ai(content: str, debug: bool = False) -> str | None:
     """AIを使ってメッセージから名前を抽出する"""
+    import sys
+
     if ai_model is None:
         if debug:
-            print("DEBUG: ai_model is None")
+            print("DEBUG: ai_model is None", flush=True)
         return None
 
     prompt = f"""以下のメッセージから人の名前（フルネーム）を1つだけ抽出してください。
@@ -71,19 +73,17 @@ def extract_name_with_ai(content: str, debug: bool = False) -> str | None:
         result = response.text.strip()
 
         if debug:
-            print(f"DEBUG AI response: '{result}' from content: '{content[:100]}...'")
+            print(f"DEBUG AI: '{result}'", flush=True)
 
         # 「なし」や空の場合はNone
         if result in ["なし", "なし。", "", "不明"]:
             return None
         # 長すぎる場合は名前ではない
         if len(result) > 20:
-            if debug:
-                print(f"DEBUG: Name too long: '{result}'")
             return None
         return result
     except Exception as e:
-        print(f"AI name extraction error: {e}")
+        print(f"AI error: {e}", flush=True)
         return None
 
 
@@ -1178,8 +1178,10 @@ async def collect_ai_stats(
             content = message.content
 
             # AIを使って名前を抽出（どんなフォーマットでも対応）
-            # 最初の10件はデバッグログを出力
-            enable_debug = debug_count <= 10
+            # 最初の5件はデバッグログを出力
+            enable_debug = debug_count <= 5
+            if enable_debug:
+                print(f"Processing message {debug_count}...", flush=True)
             name = extract_name_with_ai(content, debug=enable_debug)
 
             if name:
