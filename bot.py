@@ -522,6 +522,117 @@ def generate_csv(data: list[dict], inactive_members: list[str] = None, include_t
 # =============================================================================
 # スラッシュコマンド: /date_report（日時範囲指定）
 # =============================================================================
+# =============================================================================
+# スラッシュコマンド: /post_list（投稿一覧）
+# =============================================================================
+@tree.command(
+    name="post_list",
+    description="指定期間の全投稿を一覧表示（投稿者・内容・いいね数）",
+    guild=discord.Object(id=GUILD_ID) if GUILD_ID else None
+)
+@app_commands.describe(
+    start="開始日時（YYYY-MM-DD HH:MM）例: 2026-02-15 11:00",
+    end="終了日時（YYYY-MM-DD HH:MM）例: 2026-02-15 23:59"
+)
+async def post_list(interaction: discord.Interaction, start: str, end: str):
+    """指定期間の全投稿をいいね数付きで一覧出力"""
+
+    if ALLOWED_USER_IDS and interaction.user.id not in ALLOWED_USER_IDS:
+        await interaction.response.send_message("このコマンドを実行する権限がありません。", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+
+    # 日時パース
+    try:
+        start_dt = datetime.strptime(start.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=JST)
+        end_dt = datetime.strptime(end.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=JST)
+    except ValueError:
+        await interaction.followup.send(
+            f"日時の形式が正しくありません。\n正しい形式: `YYYY-MM-DD HH:MM`\n入力値: start=`{start}`, end=`{end}`",
+            ephemeral=True
+        )
+        return
+
+    if start_dt >= end_dt:
+        await interaction.followup.send("開始日時は終了日時より前にしてください。", ephemeral=True)
+        return
+
+    start_utc = start_dt.astimezone(UTC)
+    end_utc = end_dt.astimezone(UTC)
+
+    # 全投稿を収集
+    posts = []
+    total_hearts = 0
+    for channel_id in CHANNEL_IDS:
+        channel = interaction.guild.get_channel(channel_id)
+        if not channel or not isinstance(channel, discord.TextChannel):
+            continue
+        try:
+            async for message in channel.history(after=start_utc, before=end_utc, limit=None, oldest_first=True):
+                if EXCLUDE_BOTS and message.author.bot:
+                    continue
+                hearts = 0
+                for reaction in message.reactions:
+                    if str(reaction.emoji) == HEART_EMOJI:
+                        hearts = reaction.count
+                        break
+                total_hearts += hearts
+                post_date = message.created_at.astimezone(JST).strftime("%Y-%m-%d %H:%M")
+                dept, name_only = extract_department(message.author.display_name)
+                content = message.content.replace("\n", " ")
+                posts.append({
+                    "date": post_date,
+                    "dept": dept,
+                    "author": name_only,
+                    "hearts": hearts,
+                    "content": content
+                })
+        except discord.Forbidden:
+            await interaction.followup.send(f"チャンネル <#{channel_id}> の履歴を読む権限がありません。", ephemeral=True)
+            return
+
+    if not posts:
+        await interaction.followup.send(
+            f"{start.strip()} 〜 {end.strip()} の投稿がありませんでした。",
+            ephemeral=True
+        )
+        return
+
+    # いいね数降順でソート
+    posts.sort(key=lambda x: -x["hearts"])
+
+    # CSV生成
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["順位", "投稿日時", "部署", "投稿者", "いいね数", "投稿内容"])
+    for i, post in enumerate(posts, 1):
+        writer.writerow([i, post["date"], post["dept"], post["author"], post["hearts"], post["content"]])
+    writer.writerow([])
+    writer.writerow(["", "", "", "【合計】", total_hearts, f"投稿数: {len(posts)}件"])
+
+    csv_bytes = output.getvalue().encode("utf-8-sig")
+    filename = f"post_list_{start.strip().replace(' ', '_')}_{end.strip().replace(' ', '_')}.csv"
+
+    summary = (
+        f"**{start.strip()} 〜 {end.strip()}** の投稿一覧\n"
+        f"📝 投稿数: {len(posts)}件\n"
+        f"❤️ いいね合計: {total_hearts}"
+    )
+
+    try:
+        await interaction.user.send(
+            summary,
+            file=discord.File(io.BytesIO(csv_bytes), filename=filename)
+        )
+        await interaction.followup.send("投稿一覧をDMに送信しました。", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.followup.send("DMを送信できませんでした。DM受信設定を確認してください。", ephemeral=True)
+
+
+# =============================================================================
+# スラッシュコマンド: /date_report（日時範囲指定）
+# =============================================================================
 @tree.command(
     name="date_report",
     description="指定した日時範囲の❤️リアクション数と投稿数を集計します",
